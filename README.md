@@ -58,6 +58,7 @@ For each `~/.agy-*` profile (excluding the shared directory itself) it creates
 ```
 ~/.agy-shared/skills/        # skills shared by all profiles
 ~/.agy-<profile>/            # per-profile HOME
+├── .local -> ~/.local       # symlinked to preserve local user binaries/libraries
 └── .gemini/antigravity-cli/skills -> ~/.agy-shared/skills
 ```
 

@@ -1,8 +1,8 @@
-
 #!/usr/bin/env bash
 set -euo pipefail
 
-BASE_DIR="${HOME}/.agy"
+REAL_HOME="${HOME}"
+BASE_DIR="${REAL_HOME}/.agy"
 
 usage() {
     cat <<'EOF'
@@ -15,6 +15,24 @@ EOF
 
 valid_profile() {
     [[ "$1" =~ ^[a-zA-Z0-9_-]+$ ]]
+}
+
+ensure_local_link() {
+    local target_dir="$1"
+    local real_local="${REAL_HOME}/.local"
+
+    [[ -d "$real_local" ]] || return 0
+
+    if [[ -L "$target_dir/.local" ]]; then
+        if [[ ! -e "$target_dir/.local" ]]; then
+            rm -f "$target_dir/.local"
+            ln -s "$real_local" "$target_dir/.local"
+        fi
+    elif [[ -d "$target_dir/.local" ]]; then
+        rmdir "$target_dir/.local" 2>/dev/null && ln -s "$real_local" "$target_dir/.local" || true
+    elif [[ ! -e "$target_dir/.local" ]]; then
+        ln -s "$real_local" "$target_dir/.local"
+    fi
 }
 
 if [[ $# -lt 1 ]]; then
@@ -43,6 +61,7 @@ case "$command" in
 
         mkdir -p "$dir"
         chmod 700 "$dir"
+        ensure_local_link "$dir"
         echo "Created profile: $profile"
         echo "Home: $dir"
         echo "Run: $0 $profile"
@@ -83,7 +102,10 @@ case "$command" in
             exit 1
         }
 
+        ensure_local_link "$dir"
+
         echo "Launching agy with profile: $profile"
-        exec env HOME="$dir" agy
+        shift
+        exec env HOME="$dir" agy "$@"
         ;;
 esac

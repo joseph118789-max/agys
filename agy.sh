@@ -7,8 +7,9 @@ BASE_DIR="${REAL_HOME}/.agy"
 usage() {
     cat <<'EOF'
 Usage:
-  agy.sh new <profile>   Create a profile directory
+  agy.sh new <profile>   Create an isolated profile directory
   agy.sh list            List profiles
+  agy.sh sync            Sync PAB skills, agents, and configuration to all profiles
   agy.sh <profile>       Launch agy with that profile
 EOF
 }
@@ -17,22 +18,56 @@ valid_profile() {
     [[ "$1" =~ ^[a-zA-Z0-9_-]+$ ]]
 }
 
-ensure_local_link() {
-    local target_dir="$1"
-    local real_local="${REAL_HOME}/.local"
+ensure_symlink() {
+    local source="$1"
+    local target="$2"
 
-    [[ -d "$real_local" ]] || return 0
+    [[ -e "$source" ]] || return 0
+    mkdir -p "$(dirname "$target")"
 
-    if [[ -L "$target_dir/.local" ]]; then
-        if [[ ! -e "$target_dir/.local" ]]; then
-            rm -f "$target_dir/.local"
-            ln -s "$real_local" "$target_dir/.local"
+    if [[ -L "$target" ]]; then
+        local current
+        current="$(readlink "$target")"
+        if [[ "$current" != "$source" ]]; then
+            rm -f "$target"
+            ln -s "$source" "$target"
         fi
-    elif [[ -d "$target_dir/.local" ]]; then
-        rmdir "$target_dir/.local" 2>/dev/null && ln -s "$real_local" "$target_dir/.local" || true
-    elif [[ ! -e "$target_dir/.local" ]]; then
-        ln -s "$real_local" "$target_dir/.local"
+    elif [[ -d "$target" && ! -L "$target" ]]; then
+        if [[ -z "$(ls -A "$target" 2>/dev/null)" ]]; then
+            rmdir "$target" && ln -s "$source" "$target"
+        else
+            echo "Notice: Non-empty directory at $target; leaving as-is."
+        fi
+    elif [[ ! -e "$target" ]]; then
+        ln -s "$source" "$target"
     fi
+}
+
+ensure_profile_links() {
+    local target_dir="$1"
+
+    # 1. Preserve local binaries and libraries (~/.local)
+    ensure_symlink "${REAL_HOME}/.local" "$target_dir/.local"
+
+    # 2. Preserve PersonaOS Agent Bridge canonical registry & DB (~/.pab)
+    ensure_symlink "${REAL_HOME}/.pab" "$target_dir/.pab"
+
+    # 3. Expose PAB and universal Antigravity skills (~/.gemini/config/skills)
+    mkdir -p "${REAL_HOME}/.gemini/config/skills"
+    ensure_symlink "${REAL_HOME}/.gemini/config/skills" "$target_dir/.gemini/config/skills"
+
+    # 4. Expose PAB and universal Antigravity agents (~/.gemini/config/agents)
+    mkdir -p "${REAL_HOME}/.gemini/config/agents"
+    ensure_symlink "${REAL_HOME}/.gemini/config/agents" "$target_dir/.gemini/config/agents"
+
+    # 5. Legacy/CLI skills path (~/.gemini/antigravity-cli/skills)
+    ensure_symlink "${REAL_HOME}/.gemini/config/skills" "$target_dir/.gemini/antigravity-cli/skills"
+
+    # 6. Global Antigravity configs if present (hooks, mcp servers)
+    [[ -f "${REAL_HOME}/.gemini/config/hooks.json" ]] && \
+        ensure_symlink "${REAL_HOME}/.gemini/config/hooks.json" "$target_dir/.gemini/config/hooks.json"
+    [[ -f "${REAL_HOME}/.gemini/config/mcp_config.json" ]] && \
+        ensure_symlink "${REAL_HOME}/.gemini/config/mcp_config.json" "$target_dir/.gemini/config/mcp_config.json"
 }
 
 if [[ $# -lt 1 ]]; then
@@ -61,7 +96,7 @@ case "$command" in
 
         mkdir -p "$dir"
         chmod 700 "$dir"
-        ensure_local_link "$dir"
+        ensure_profile_links "$dir"
         echo "Created profile: $profile"
         echo "Home: $dir"
         echo "Run: $0 $profile"
@@ -72,6 +107,7 @@ case "$command" in
 
         for dir in "${BASE_DIR}"-*; do
             [[ -d "$dir" ]] || continue
+            [[ "$dir" == "${BASE_DIR}-shared" ]] && continue
             printf '%s\n' "${dir##*-}"
             found=1
         done
@@ -79,6 +115,20 @@ case "$command" in
         if [[ "$found" -eq 0 ]]; then
             echo "No profiles found. Create one with: $0 new <profile>"
         fi
+        ;;
+
+    sync)
+        echo "Synchronising PAB skills, agents, and configuration across all profiles..."
+        synced=0
+        for dir in "${BASE_DIR}"-*; do
+            [[ -d "$dir" ]] || continue
+            [[ "$dir" == "${BASE_DIR}-shared" ]] && continue
+            p_name="${dir##*-}"
+            ensure_profile_links "$dir"
+            echo "  [OK] Profile '$p_name' linked with PAB"
+            synced=$((synced + 1))
+        done
+        echo "Sync complete ($synced profiles updated)."
         ;;
 
     *)
@@ -102,10 +152,16 @@ case "$command" in
             exit 1
         }
 
-        ensure_local_link "$dir"
+        ensure_profile_links "$dir"
 
         echo "Launching agy with profile: $profile"
+        echo "  [PAB] Unified skills & agents active from ${REAL_HOME}/.gemini/config"
         shift
-        exec env HOME="$dir" agy "$@"
+        exec env \
+            HOME="$dir" \
+            PAB_HOME="${REAL_HOME}/.pab" \
+            PATH="${REAL_HOME}/.local/bin:${PATH}" \
+            GEMINI_CONFIG_DIR="$dir/.gemini/config" \
+            agy "$@"
         ;;
 esac

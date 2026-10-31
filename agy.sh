@@ -3,14 +3,17 @@ set -euo pipefail
 
 REAL_HOME="${HOME}"
 BASE_DIR="${REAL_HOME}/.agy"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
     cat <<'EOF'
 Usage:
-  agy.sh new <profile>   Create an isolated profile directory
-  agy.sh list            List profiles
-  agy.sh sync            Sync PAB skills, agents, and configuration to all profiles
-  agy.sh <profile>       Launch agy with that profile
+  agy.sh new <profile>            Create an isolated profile directory
+  agy.sh list                     List existing profiles
+  agy.sh sync                     Sync PAB skills, agents, and configuration to all profiles
+  agy.sh list-openclaw            List OpenClaw agents and their configured skills
+  agy.sh import-skill <agent_id>  Import skills and agent from OpenClaw into Antigravity & PAB
+  agy.sh <profile>                Launch agy with that profile
 EOF
 }
 
@@ -129,6 +132,20 @@ case "$command" in
             synced=$((synced + 1))
         done
         echo "Sync complete ($synced profiles updated)."
+        ;;
+
+    list-openclaw|openclaw-list)
+        python3 "${SCRIPT_DIR}/import_openclaw_skills.py" list
+        ;;
+
+    import-skill|import-openclaw)
+        [[ $# -ge 2 ]] || {
+            echo "Usage: $0 import-skill <agent_id|all>" >&2
+            echo "Run '$0 list-openclaw' to view available agents." >&2
+            exit 1
+        }
+        agent_id="$2"
+        python3 "${SCRIPT_DIR}/import_openclaw_skills.py" "$agent_id"
         ;;
 
     *)

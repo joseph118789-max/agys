@@ -1,13 +1,41 @@
 #!/usr/bin/env bash
 # agy-skill.sh — Synchronise PAB skills and agents to all Antigravity profiles
+#               and import skills from OpenClaw by agent
 set -euo pipefail
 
 REAL_HOME="${HOME}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SHARED_SKILLS="${REAL_HOME}/.agy-shared/skills"
 PAB_SKILLS="${REAL_HOME}/.gemini/config/skills"
 PAB_AGENTS="${REAL_HOME}/.gemini/config/agents"
 
 mkdir -p "$SHARED_SKILLS" "$PAB_SKILLS" "$PAB_AGENTS"
+
+# Handle CLI arguments
+if [[ $# -ge 1 ]]; then
+    case "$1" in
+        import|openclaw|--agent|-a)
+            [[ $# -ge 2 ]] || {
+                echo "Usage: $0 import <agent_id|all>"
+                echo "Run '$0 list' to see available OpenClaw agents."
+                exit 1
+            }
+            python3 "${SCRIPT_DIR}/import_openclaw_skills.py" "$2"
+            exit 0
+            ;;
+        list|list-openclaw|--list|-l)
+            python3 "${SCRIPT_DIR}/import_openclaw_skills.py" list
+            exit 0
+            ;;
+        help|--help|-h)
+            echo "Usage:"
+            echo "  $0                  Sync PAB skills and agents across all profiles"
+            echo "  $0 import <agent>   Import skills from an OpenClaw agent (e.g. devops, qa, cto, main, all)"
+            echo "  $0 list             List all OpenClaw agents and their skills"
+            exit 0
+            ;;
+    esac
+fi
 
 # If legacy .agy-shared/skills contains any items, sync them to ~/.gemini/config/skills
 if [[ -d "$SHARED_SKILLS" ]]; then
@@ -41,7 +69,7 @@ ensure_symlink() {
         if [[ -z "$(ls -A "$target" 2>/dev/null)" ]]; then
             rmdir "$target" && ln -s "$source" "$target"
         else
-            echo "  Notice: Non-empty directory at $target; leaving as-is."
+            echo "  Notice: Non-empty directory at $target; skipped."
             return 0
         fi
     elif [[ ! -e "$target" ]]; then

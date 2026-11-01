@@ -2,6 +2,12 @@
 set -euo pipefail
 
 REAL_HOME="${HOME}"
+# If running inside an isolated profile, resolve actual system user home
+if [[ "$REAL_HOME" =~ /\.agy-[^/]+$ ]]; then
+    REAL_HOME="$(getent passwd "$(id -un)" 2>/dev/null | cut -d: -f6 || true)"
+    [[ -z "$REAL_HOME" ]] && REAL_HOME="$(eval echo ~"$(id -un)" 2>/dev/null || true)"
+    [[ -z "$REAL_HOME" ]] && REAL_HOME="${HOME%/.agy-*}"
+fi
 BASE_DIR="${REAL_HOME}/.agy"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -13,6 +19,7 @@ Usage:
   agy.sh sync                     Sync PAB skills, agents, and configuration to all profiles
   agy.sh list-openclaw            List OpenClaw agents and their configured skills
   agy.sh import-skill <agent_id>  Import skills and agent from OpenClaw into Antigravity & PAB
+  agy.sh session [args...]        Browse, inspect, move or copy sessions between profiles
   agy.sh <profile>                Launch agy with that profile
 EOF
 }
@@ -146,6 +153,11 @@ case "$command" in
         }
         agent_id="$2"
         python3 "${SCRIPT_DIR}/import_openclaw_skills.py" "$agent_id"
+        ;;
+
+    session|sessions)
+        shift
+        "${SCRIPT_DIR}/agy-session.sh" "$@"
         ;;
 
     *)

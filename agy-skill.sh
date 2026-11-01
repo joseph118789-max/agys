@@ -4,6 +4,12 @@
 set -euo pipefail
 
 REAL_HOME="${HOME}"
+# If running inside an isolated profile, resolve actual system user home
+if [[ "$REAL_HOME" =~ /\.agy-[^/]+$ ]]; then
+    REAL_HOME="$(getent passwd "$(id -un)" 2>/dev/null | cut -d: -f6 || true)"
+    [[ -z "$REAL_HOME" ]] && REAL_HOME="$(eval echo ~"$(id -un)" 2>/dev/null || true)"
+    [[ -z "$REAL_HOME" ]] && REAL_HOME="${HOME%/.agy-*}"
+fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SHARED_SKILLS="${REAL_HOME}/.agy-shared/skills"
 PAB_SKILLS="${REAL_HOME}/.gemini/config/skills"

@@ -66,6 +66,51 @@ What it does:
 4. Links `~/.gemini/config/skills`, `~/.gemini/config/agents`, and `~/.pab` into each isolated Antigravity profile (`~/.agy-*`).
 5. Preserves backward compatibility with legacy `~/.agy-shared/skills` by automatically importing legacy skills into PAB skills.
 
+### `agy-session.sh`
+
+Browse, inspect, move, and copy conversations/sessions across Antigravity profiles:
+
+```bash
+# Interactive TUI browser (recommended)
+./agy-session.sh browse             # or simply run ./agy-session.sh with no args
+
+# Profile overview
+./agy-session.sh homes              # list all profiles, session counts, and disk usage
+
+# Browse conversations
+./agy-session.sh list <profile>     # list sessions in a profile (e.g. seekn, 93975, default)
+./agy-session.sh list --all         # list sessions across all profiles
+./agy-session.sh list --search auth # search sessions by title, UUID, or workspace
+./agy-session.sh list --sort size   # sort by date, steps, size, or title
+
+# Inspect conversation details
+./agy-session.sh info <conv_id>     # view metadata, prompt history, artifacts, and sizes
+
+# Move & copy sessions
+./agy-session.sh move <conv_id> --to <target_profile>  # move session and artifacts to another profile
+./agy-session.sh copy <conv_id> --to <target_profile>  # duplicate session into another profile
+./agy-session.sh delete <conv_id>   # safely remove session, db, artifacts, and metadata
+```
+
+Also accessible via `agy.sh`:
+```bash
+./agy.sh session homes
+./agy.sh session list seekn
+./agy.sh session move <conv_id> --to <target_profile>
+```
+
+What it does:
+1. **Interactive Browser**: Navigate profiles and conversations with an intuitive menu, filter/search by keywords, view prompt history, and move/copy sessions with confirmation.
+2. **Safe Migration**:
+   - Automatically checks session locks (`presence/<id>.lock`) to prevent moving active running sessions.
+   - Performs SQLite WAL checkpoint (`wal_checkpoint(TRUNCATE)`) and verifies database integrity before cleanup.
+   - Migrates `conversations/<id>.db`, `brain/<id>/` artifacts directory, `annotations/<id>.pbtxt`, prompt history in `history.jsonl`, and metadata rows in `conversation_summaries.db`.
+   - Cleans up source workspace mappings and stale locks on move.
+3. **Seamless Resumption**: After moving or copying, resume immediately with:
+   ```bash
+   ./agy.sh <target_profile> --conversation <conv_id>
+   ```
+
 ## Layout & PAB Integration
 
 ```

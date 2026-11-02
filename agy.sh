@@ -20,6 +20,8 @@ Usage:
   agy.sh list-openclaw            List OpenClaw agents and their configured skills
   agy.sh import-skill <agent_id>  Import skills and agent from OpenClaw into Antigravity & PAB
   agy.sh session [args...]        Browse, inspect, move or copy sessions between profiles
+  agy.sh consolidate [args...]    Consolidate all conversations into ~/.gemini/antigravity-cli/conversations
+  agy.sh single-folder [args...]  Manage shared single-folder conversations mode (status, enable, disable)
   agy.sh <profile>                Launch agy with that profile
 EOF
 }
@@ -78,6 +80,18 @@ ensure_profile_links() {
         ensure_symlink "${REAL_HOME}/.gemini/config/hooks.json" "$target_dir/.gemini/config/hooks.json"
     [[ -f "${REAL_HOME}/.gemini/config/mcp_config.json" ]] && \
         ensure_symlink "${REAL_HOME}/.gemini/config/mcp_config.json" "$target_dir/.gemini/config/mcp_config.json"
+
+    # 7. Single folder conversations mode (if enabled)
+    if [[ -f "${REAL_HOME}/.gemini/config/single_folder_conversations" ]]; then
+        mkdir -p "${REAL_HOME}/.gemini/antigravity-cli/conversations"
+        mkdir -p "${REAL_HOME}/.gemini/antigravity-cli/brain"
+        mkdir -p "${REAL_HOME}/.gemini/antigravity-cli/annotations"
+        ensure_symlink "${REAL_HOME}/.gemini/antigravity-cli/conversations" "$target_dir/.gemini/antigravity-cli/conversations"
+        ensure_symlink "${REAL_HOME}/.gemini/antigravity-cli/brain" "$target_dir/.gemini/antigravity-cli/brain"
+        ensure_symlink "${REAL_HOME}/.gemini/antigravity-cli/annotations" "$target_dir/.gemini/antigravity-cli/annotations"
+        [[ -f "${REAL_HOME}/.gemini/antigravity-cli/conversation_summaries.db" ]] && \
+            ensure_symlink "${REAL_HOME}/.gemini/antigravity-cli/conversation_summaries.db" "$target_dir/.gemini/antigravity-cli/conversation_summaries.db"
+    fi
 }
 
 if [[ $# -lt 1 ]]; then
@@ -158,6 +172,16 @@ case "$command" in
     session|sessions)
         shift
         "${SCRIPT_DIR}/agy-session.sh" "$@"
+        ;;
+
+    consolidate|merge-all)
+        shift
+        "${SCRIPT_DIR}/agy-session.sh" consolidate "$@"
+        ;;
+
+    single-folder|singlefolder)
+        shift
+        "${SCRIPT_DIR}/agy-session.sh" single-folder "$@"
         ;;
 
     *)

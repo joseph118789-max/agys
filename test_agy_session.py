@@ -24,6 +24,8 @@ from agy_session import (
     delete_conversation,
     ensure_summaries_db,
     is_conversation_locked,
+    consolidate_all_conversations,
+    set_single_folder_mode,
 )
 
 
@@ -187,6 +189,142 @@ def run_tests():
         assert_true(ok_del, "Delete succeeded")
         assert_true(not (dst2_cli / "conversations" / f"{test_cid}.db").exists(), "Deleted DB gone")
         assert_true(not (dst2_cli / "brain" / test_cid).exists(), "Deleted brain gone")
+
+    # Test 6: Consolidate All Conversations in Sandbox
+    print("\n--- Test 6: Consolidate All into Single Central Folder ---")
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_path = Path(tmp_dir)
+
+        # Central Hub
+        hub_dir = tmp_path / ".gemini"
+        hub_cli = hub_dir / "antigravity-cli"
+        hub_cli.mkdir(parents=True)
+        home_hub = AgyHome(name="default", home_dir=hub_dir, cli_dir=hub_cli, is_default=True)
+
+        # Profile A
+        pa_dir = tmp_path / ".agy-profa"
+        pa_cli = pa_dir / ".gemini" / "antigravity-cli"
+        pa_cli.mkdir(parents=True)
+        home_pa = AgyHome(name="profa", home_dir=pa_dir, cli_dir=pa_cli)
+
+        # Profile B
+        pb_dir = tmp_path / ".agy-profb"
+        pb_cli = pb_dir / ".gemini" / "antigravity-cli"
+        pb_cli.mkdir(parents=True)
+        home_pb = AgyHome(name="profb", home_dir=pb_dir, cli_dir=pb_cli)
+
+        homes_dict = {"default": home_hub, "profa": home_pa, "profb": home_pb}
+
+        # Setup mock conversation in profa
+        cid_a = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        (pa_cli / "conversations").mkdir(parents=True)
+        (pa_cli / "brain" / cid_a).mkdir(parents=True)
+        with sqlite3.connect(str(pa_cli / "conversations" / f"{cid_a}.db")) as conn:
+            conn.execute("CREATE TABLE steps (idx int, PRIMARY KEY(idx))")
+            conn.commit()
+        sum_a = pa_cli / "conversation_summaries.db"
+        ensure_summaries_db(sum_a)
+        with sqlite3.connect(str(sum_a)) as conn:
+            conn.execute("""
+                INSERT INTO conversation_summaries
+                (conversation_id, title, preview, step_count, last_modified_time, workspace_uris, status, last_user_input_time)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (cid_a, "Task A", "Prev A", 1, "2026-11-01 00:00:00+00:00", "[]", "IDLE", "2026-11-01 00:00:00+00:00"))
+            conn.commit()
+
+        # Setup mock conversation in profb
+        cid_b = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+        (pb_cli / "conversations").mkdir(parents=True)
+        (pb_cli / "brain" / cid_b).mkdir(parents=True)
+        with sqlite3.connect(str(pb_cli / "conversations" / f"{cid_b}.db")) as conn:
+            conn.execute("CREATE TABLE steps (idx int, PRIMARY KEY(idx))")
+            conn.commit()
+        sum_b = pb_cli / "conversation_summaries.db"
+        ensure_summaries_db(sum_b)
+        with sqlite3.connect(str(sum_b)) as conn:
+            conn.execute("""
+                INSERT INTO conversation_summaries
+                (conversation_id, title, preview, step_count, last_modified_time, workspace_uris, status, last_user_input_time)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (cid_b, "Task B", "Prev B", 2, "2026-11-01 00:00:00+00:00", "[]", "IDLE", "2026-11-01 00:00:00+00:00"))
+            conn.commit()
+
+        # Run consolidation
+        res = consolidate_all_conversations(
+            homes=homes_dict,
+            target_home=home_hub,
+            is_move=True,
+            link_after=False,
+            force=False,
+        )
+        assert_true(len(res["transferred"]) == 2, "Consolidated 2 conversations")
+        assert_true((hub_cli / "conversations" / f"{cid_a}.db").is_file(), "Task A in central hub")
+        assert_true((hub_cli / "conversations" / f"{cid_b}.db").is_file(), "Task B in central hub")
+        assert_true(len(get_conversations(home_hub)) == 2, "Central hub has both conversations")
+        assert_true(len(get_conversations(home_pa)) == 0, "profa is now empty")
+        assert_true(len(get_conversations(home_pb)) == 0, "profb is now empty")
+
+    # Test 7: Single-Folder Mode Toggle
+    print("\n--- Test 7: Single-Folder Mode Linking & Toggle ---")
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_path = Path(tmp_dir)
+
+        # Set env HOME to tmp_path to test marker file and profile links cleanly
+        hub_dir = tmp_path / ".gemini"
+        hub_cli = hub_dir / "antigravity-cli"
+        hub_cli.mkdir(parents=True)
+        home_hub = AgyHome(name="default", home_dir=hub_dir, cli_dir=hub_cli, is_default=True)
+
+        pa_dir = tmp_path / ".agy-profa"
+        pa_cli = pa_dir / ".gemini" / "antigravity-cli"
+        pa_cli.mkdir(parents=True)
+        (pa_cli / "conversations").mkdir(parents=True)
+        (pa_cli / "brain").mkdir(parents=True)
+        (pa_cli / "annotations").mkdir(parents=True)
+        ensure_summaries_db(pa_cli / "conversation_summaries.db")
+        home_pa = AgyHome(name="profa", home_dir=pa_dir, cli_dir=pa_cli)
+
+        homes_dict = {"default": home_hub, "profa": home_pa}
+
+        # Mock conversation in profa
+        cid_x = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+        with sqlite3.connect(str(pa_cli / "conversations" / f"{cid_x}.db")) as conn:
+            conn.execute("CREATE TABLE steps (idx int, PRIMARY KEY(idx))")
+            conn.commit()
+        with sqlite3.connect(str(pa_cli / "conversation_summaries.db")) as conn:
+            conn.execute("""
+                INSERT INTO conversation_summaries
+                (conversation_id, title, preview, step_count, last_modified_time, workspace_uris, status, last_user_input_time)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (cid_x, "Task X", "Prev X", 1, "2026-11-01 00:00:00+00:00", "[]", "IDLE", "2026-11-01 00:00:00+00:00"))
+            conn.commit()
+
+        # Enable single-folder mode (consolidate + symlink)
+        orig_home = os.environ.get("HOME")
+        os.environ["HOME"] = str(tmp_path)
+        try:
+            ok, msg = set_single_folder_mode(homes_dict, home_hub, enable=True)
+            assert_true(ok, f"Enable single-folder mode succeeded: {msg}")
+            assert_true((hub_cli / "conversations" / f"{cid_x}.db").is_file(), "Task X moved to hub")
+            assert_true((pa_cli / "conversations").is_symlink(), "profa conversations is symlink")
+            assert_true((pa_cli / "brain").is_symlink(), "profa brain is symlink")
+            assert_true((pa_cli / "conversation_summaries.db").is_symlink(), "profa summaries is symlink")
+
+            # Check writing a new conversation through profa appears in central hub
+            cid_y = "yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy"
+            with sqlite3.connect(str(pa_cli / "conversations" / f"{cid_y}.db")) as conn:
+                conn.execute("CREATE TABLE steps (idx int, PRIMARY KEY(idx))")
+                conn.commit()
+            assert_true((hub_cli / "conversations" / f"{cid_y}.db").is_file(), "New session created in profa exists in central hub")
+
+            # Disable single-folder mode (restore isolated)
+            ok_dis, msg_dis = set_single_folder_mode(homes_dict, home_hub, enable=False)
+            assert_true(ok_dis, "Disable single-folder mode succeeded")
+            assert_true(not (pa_cli / "conversations").is_symlink(), "profa conversations is no longer symlink")
+            assert_true((pa_cli / "conversations").is_dir(), "profa conversations is real directory")
+        finally:
+            if orig_home:
+                os.environ["HOME"] = orig_home
 
     print("\n==================================================================")
     print(f"Results: {passed} / {total} tests passed successfully!")

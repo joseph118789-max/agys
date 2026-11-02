@@ -90,6 +90,16 @@ Browse, inspect, move, and copy conversations/sessions across Antigravity profil
 ./agy-session.sh move <conv_id> --to <target_profile>  # move session and artifacts to another profile
 ./agy-session.sh copy <conv_id> --to <target_profile>  # duplicate session into another profile
 ./agy-session.sh delete <conv_id>   # safely remove session, db, artifacts, and metadata
+
+# Put all conversations into single folder (~/.gemini/antigravity-cli/conversations)
+./agy-session.sh consolidate        # move all conversations from all profiles into central folder
+./agy-session.sh consolidate --copy # copy all conversations to central (keep profile originals)
+./agy-session.sh consolidate --link # move all conversations and link profiles to central folder
+
+# Manage single-folder shared conversations mode
+./agy-session.sh single-folder status   # view storage mode per profile (isolated vs shared)
+./agy-session.sh single-folder enable   # consolidate & link all profiles to single central folder
+./agy-session.sh single-folder disable  # restore isolated local storage per profile
 ```
 
 Also accessible via `agy.sh`:
@@ -97,16 +107,23 @@ Also accessible via `agy.sh`:
 ./agy.sh session homes
 ./agy.sh session list seekn
 ./agy.sh session move <conv_id> --to <target_profile>
+./agy.sh consolidate               # put all conversations into single folder
+./agy.sh single-folder status      # check single-folder mode status
+./agy.sh single-folder enable      # enable shared single-folder mode
 ```
 
 What it does:
 1. **Interactive Browser**: Navigate profiles and conversations with an intuitive menu, filter/search by keywords, view prompt history, and move/copy sessions with confirmation.
-2. **Safe Migration**:
+2. **Single-Folder Consolidation & Shared Storage**:
+   - `consolidate`: Gathers all conversation databases (`conversations/<id>.db*`), brain artifacts (`brain/<id>/`), annotations, prompt history, and SQLite summaries into the single folder `~/.gemini/antigravity-cli/conversations`.
+   - `single-folder enable`: Automatically links `~/.agy-<profile>/.gemini/antigravity-cli/conversations` (and `brain/`, `conversation_summaries.db`) to `~/.gemini/antigravity-cli/` via symlinks so that all profiles immediately share the exact same single central folder for all past and future sessions.
+   - Any new profile created via `./agy.sh new <profile>` will also automatically share the central folder when enabled.
+3. **Safe Migration**:
    - Automatically checks session locks (`presence/<id>.lock`) to prevent moving active running sessions.
    - Performs SQLite WAL checkpoint (`wal_checkpoint(TRUNCATE)`) and verifies database integrity before cleanup.
    - Migrates `conversations/<id>.db`, `brain/<id>/` artifacts directory, `annotations/<id>.pbtxt`, prompt history in `history.jsonl`, and metadata rows in `conversation_summaries.db`.
    - Cleans up source workspace mappings and stale locks on move.
-3. **Seamless Resumption**: After moving or copying, resume immediately with:
+4. **Seamless Resumption**: After moving or copying, resume immediately with:
    ```bash
    ./agy.sh <target_profile> --conversation <conv_id>
    ```

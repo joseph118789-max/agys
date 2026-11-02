@@ -1085,6 +1085,24 @@ def consolidate_all_conversations(
                         "profile": src_h.name,
                         "same_size": same_size,
                     })
+                    if is_move:
+                        src_db = src_h.cli_dir / "conversations" / f"{c.id}.db"
+                        src_db.unlink(missing_ok=True)
+                        (src_h.cli_dir / "conversations" / f"{c.id}.db-wal").unlink(missing_ok=True)
+                        (src_h.cli_dir / "conversations" / f"{c.id}.db-shm").unlink(missing_ok=True)
+                        (src_h.cli_dir / "annotations" / f"{c.id}.pbtxt").unlink(missing_ok=True)
+                        (src_h.cli_dir / "presence" / f"{c.id}.lock").unlink(missing_ok=True)
+                        src_brain = src_h.cli_dir / "brain" / c.id
+                        if src_brain.is_dir():
+                            shutil.rmtree(src_brain, ignore_errors=True)
+                        src_sum = src_h.cli_dir / "conversation_summaries.db"
+                        if src_sum.is_file():
+                            try:
+                                with sqlite3.connect(str(src_sum)) as conn:
+                                    conn.execute("DELETE FROM conversation_summaries WHERE conversation_id = ?", (c.id,))
+                                    conn.commit()
+                            except Exception:
+                                pass
                     continue
 
             # 3. Transfer conversation
@@ -1117,8 +1135,12 @@ def consolidate_all_conversations(
 
         # Check linking
         if link_after and not dry_run and is_move:
-            remaining = get_conversations(src_h)
-            if not remaining:
+            has_locked = any(s["profile"] == src_h.name for s in stats["skipped_locked"])
+            remaining = [
+                c for c in get_conversations(src_h)
+                if not (target_conv_dir / f"{c.id}.db").is_file()
+            ]
+            if not has_locked and not remaining:
                 log(f"[*] Linking profile '{src_h.name}' to single central folder...")
                 try:
                     for sub in ["conversations", "brain", "annotations"]:
@@ -1127,6 +1149,7 @@ def consolidate_all_conversations(
                             p_sub.unlink()
                         elif p_sub.is_dir():
                             shutil.rmtree(p_sub, ignore_errors=True)
+                        p_sub.parent.mkdir(parents=True, exist_ok=True)
                         p_sub.symlink_to(target_cli / sub)
 
                     sum_f = src_h.cli_dir / "conversation_summaries.db"
@@ -1142,7 +1165,12 @@ def consolidate_all_conversations(
                 except Exception as e:
                     log(f"  [FAIL] Could not link profile '{src_h.name}': {e}")
             else:
-                log(f"  Notice: Profile '{src_h.name}' still has {len(remaining)} conversations remaining; linking skipped.")
+                reasons = []
+                if has_locked:
+                    reasons.append("active session locks")
+                if remaining:
+                    reasons.append(f"{len(remaining)} conversations remaining")
+                log(f"  Notice: Profile '{src_h.name}' linking skipped ({', '.join(reasons)}).")
 
     return stats
 
@@ -1154,6 +1182,7 @@ def set_single_folder_mode(
     force: bool = False,
     dry_run: bool = False,
     progress_callback: Optional[Any] = None,
+    base_dir: Optional[Path] = None,
 ) -> Tuple[bool, str]:
     """
     Enable or disable single-folder conversations mode across all profiles.
@@ -1166,7 +1195,7 @@ def set_single_folder_mode(
         if progress_callback:
             progress_callback(msg)
 
-    base = get_base_user_home()
+    base = base_dir.resolve() if base_dir else get_base_user_home()
     marker_file = base / ".gemini" / "config" / SINGLE_FOLDER_MARKER
     target_cli = target_home.cli_dir
 
@@ -1198,20 +1227,39 @@ def set_single_folder_mode(
             if h.name == target_home.name:
                 continue
 
-            # Check if any non-locked conversations remain
-            remaining = get_conversations(h)
-            # If conversations dir is already a symlink to target, it's linked
+            # Check if conversations dir is already a symlink to target
             if (h.cli_dir / "conversations").is_symlink():
                 try:
                     if (h.cli_dir / "conversations").resolve() == (target_cli / "conversations").resolve():
+                        for sub in ["brain", "annotations"]:
+                            p_sub = h.cli_dir / sub
+                            if not p_sub.is_symlink():
+                                if p_sub.is_dir():
+                                    shutil.rmtree(p_sub, ignore_errors=True)
+                                p_sub.symlink_to(target_cli / sub)
+                        sum_f = h.cli_dir / "conversation_summaries.db"
+                        if not sum_f.is_symlink() and (target_cli / "conversation_summaries.db").is_file():
+                            sum_f.unlink(missing_ok=True)
+                            sum_f.symlink_to(target_cli / "conversation_summaries.db")
                         log(f"  [OK] Profile '{name}' is already linked.")
                         linked_count += 1
                         continue
                 except Exception:
                     pass
 
-            if remaining:
-                log(yellow(f"  [!] Profile '{name}' has {len(remaining)} conversations that could not be moved (e.g. active locks). Linking skipped."))
+            has_locked = any(s["profile"] == name for s in stats["skipped_locked"])
+            unmoved = [
+                c for c in get_conversations(h)
+                if not (target_cli / "conversations" / f"{c.id}.db").is_file()
+            ]
+
+            if has_locked and not force:
+                log(yellow(f"  [!] Profile '{name}' has active session locks. Linking skipped."))
+                skipped_count += 1
+                continue
+
+            if unmoved and not force:
+                log(yellow(f"  [!] Profile '{name}' has {len(unmoved)} conversations that could not be moved (e.g. active locks). Linking skipped."))
                 skipped_count += 1
                 continue
 
@@ -1704,6 +1752,7 @@ def cmd_single_folder(args: argparse.Namespace):
             force=getattr(args, "force", False),
             dry_run=getattr(args, "dry_run", False),
             progress_callback=print,
+            base_dir=base,
         )
         if ok:
             print(green(f"\n{msg}\n"))
@@ -1719,6 +1768,7 @@ def cmd_single_folder(args: argparse.Namespace):
             force=getattr(args, "force", False),
             dry_run=getattr(args, "dry_run", False),
             progress_callback=print,
+            base_dir=base,
         )
         if ok:
             print(green(f"\n{msg}\n"))
@@ -1765,130 +1815,6 @@ def cmd_delete(args: argparse.Namespace):
         sys.exit(1)
     else:
         print(green(f"\n{msg}\n"))
-
-
-def cmd_consolidate(args: argparse.Namespace):
-    """Consolidate conversations from all profiles into a single folder (~/.gemini)."""
-    homes = discover_homes(args.base_dir)
-    target_h = resolve_home(args.target_home, homes, args.base_dir) if getattr(args, "target_home", None) else homes.get("default")
-    if not target_h:
-        print(red("Error: Target profile not found."))
-        sys.exit(1)
-
-    print(f"\n{bold('Consolidating All Conversations into Single Folder:')}")
-    print("=" * 76)
-    print(f" Target Folder : {cyan(str(target_h.cli_dir / 'conversations'))}")
-    print(f" Target Profile: {green(target_h.name)}")
-    print(f" Mode          : {'Copy (keep profile originals)' if getattr(args, 'copy', False) else 'Move (consolidate to central)'}")
-    print(f" Link Profiles : {'Yes (profiles will share central folder)' if getattr(args, 'link', False) else 'No'}")
-    if getattr(args, 'dry_run', False):
-        print(f" Execution     : {yellow('DRY RUN (simulation only)')}")
-    print("=" * 76 + "\n")
-
-    stats = consolidate_all_conversations(
-        homes=homes,
-        target_home=target_h,
-        is_move=not getattr(args, "copy", False),
-        link_after=getattr(args, "link", False),
-        force=getattr(args, "force", False),
-        dry_run=getattr(args, "dry_run", False),
-        progress_callback=print,
-    )
-
-    if getattr(args, "json", False):
-        print(json.dumps(stats, indent=2))
-        return
-
-    print("\n" + "=" * 76)
-    print(bold("Consolidation Summary:"))
-    print(f"  - Profiles Scanned     : {stats['profiles_scanned']}")
-    print(f"  - Transferred          : {green(len(stats['transferred']))}")
-    print(f"  - Skipped (Active Lock): {yellow(len(stats['skipped_locked']))}")
-    print(f"  - Skipped (Already in Hub): {len(stats['skipped_exists'])}")
-    print(f"  - Already Linked       : {len(stats['skipped_linked'])}")
-    print(f"  - Failed               : {red(len(stats['failed'])) if stats['failed'] else '0'}")
-    if stats['linked_profiles']:
-        print(f"  - Profiles Linked      : {magenta(', '.join(stats['linked_profiles']))}")
-    print("=" * 76)
-    target_conv_dir = target_h.cli_dir / "conversations"
-    print(f"All consolidated conversations are now in: {bold(str(target_conv_dir))}\n")
-
-
-def cmd_single_folder(args: argparse.Namespace):
-    """Manage single-folder shared conversations mode."""
-    action = getattr(args, "action", "status") or "status"
-    action = action.lower()
-    base = args.base_dir.resolve() if args.base_dir else get_base_user_home()
-    homes = discover_homes(base)
-    target_h = homes.get("default")
-    if not target_h:
-        print(red("Error: Default profile (~/.gemini) not found."))
-        sys.exit(1)
-
-    if action in ("status", "info"):
-        is_globally_on = is_single_folder_globally_enabled(base)
-        central_convs = get_conversations(target_h)
-        total_central_size = sum(c.db_size for c in central_convs)
-
-        print(f"\n{bold('Antigravity Single-Folder Conversations Mode:')}")
-        print("=" * 80)
-        print(f" Central Directory  : {cyan(str(target_h.cli_dir / 'conversations'))}")
-        print(f" Global Config      : {green('ENABLED (new profiles will share central)') if is_globally_on else dim('DISABLED (profiles use isolated storage by default)')}")
-        print(f" Central Sessions   : {len(central_convs)} conversations ({format_size(total_central_size)})")
-        print("-" * 80)
-        print(f" {'Profile':<14} {'Storage Mode':<18} {'Sessions':<12} {'Conversations Path'}")
-        print("-" * 80)
-
-        for name, h in sorted(homes.items(), key=lambda x: (not x[1].is_default, x[0])):
-            if h.is_default:
-                mode_str = green("CENTRAL HUB")
-                sess_str = str(len(central_convs))
-                loc_str = str(h.cli_dir / "conversations")
-            elif h.is_linked_to_central:
-                mode_str = magenta("LINKED (shared)")
-                sess_str = "(shared)"
-                loc_str = f"-> {target_h.cli_dir / 'conversations'}"
-            else:
-                convs = get_conversations(h)
-                mode_str = yellow("ISOLATED (local)")
-                sess_str = str(len(convs))
-                loc_str = str(h.cli_dir / "conversations")
-
-            print(f" {name:<14} {mode_str:<27} {sess_str:<12} {loc_str}")
-
-        print("=" * 80)
-        print("To enable  : ./agy-session.sh single-folder enable")
-        print("To disable : ./agy-session.sh single-folder disable\n")
-
-    elif action in ("enable", "on"):
-        ok, msg = set_single_folder_mode(
-            homes=homes,
-            target_home=target_h,
-            enable=True,
-            force=getattr(args, "force", False),
-            dry_run=getattr(args, "dry_run", False),
-            progress_callback=print,
-        )
-        if ok:
-            print(green(f"\n{msg}\n"))
-        else:
-            print(red(f"\n[!] Failed: {msg}\n"))
-            sys.exit(1)
-
-    elif action in ("disable", "off", "isolate"):
-        ok, msg = set_single_folder_mode(
-            homes=homes,
-            target_home=target_h,
-            enable=False,
-            force=getattr(args, "force", False),
-            dry_run=getattr(args, "dry_run", False),
-            progress_callback=print,
-        )
-        if ok:
-            print(green(f"\n{msg}\n"))
-        else:
-            print(red(f"\n[!] Failed: {msg}\n"))
-            sys.exit(1)
 
 
 # -----------------------------------------------------------------------------

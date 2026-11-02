@@ -50,6 +50,9 @@ ensure_symlink() {
         else
             echo "Notice: Non-empty directory at $target; leaving as-is."
         fi
+    elif [[ -f "$target" && ! -L "$target" ]]; then
+        rm -f "$target"
+        ln -s "$source" "$target"
     elif [[ ! -e "$target" ]]; then
         ln -s "$source" "$target"
     fi

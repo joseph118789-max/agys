@@ -303,7 +303,7 @@ def run_tests():
         orig_home = os.environ.get("HOME")
         os.environ["HOME"] = str(tmp_path)
         try:
-            ok, msg = set_single_folder_mode(homes_dict, home_hub, enable=True)
+            ok, msg = set_single_folder_mode(homes_dict, home_hub, enable=True, base_dir=tmp_path)
             assert_true(ok, f"Enable single-folder mode succeeded: {msg}")
             assert_true((hub_cli / "conversations" / f"{cid_x}.db").is_file(), "Task X moved to hub")
             assert_true((pa_cli / "conversations").is_symlink(), "profa conversations is symlink")
@@ -318,13 +318,63 @@ def run_tests():
             assert_true((hub_cli / "conversations" / f"{cid_y}.db").is_file(), "New session created in profa exists in central hub")
 
             # Disable single-folder mode (restore isolated)
-            ok_dis, msg_dis = set_single_folder_mode(homes_dict, home_hub, enable=False)
+            ok_dis, msg_dis = set_single_folder_mode(homes_dict, home_hub, enable=False, base_dir=tmp_path)
             assert_true(ok_dis, "Disable single-folder mode succeeded")
             assert_true(not (pa_cli / "conversations").is_symlink(), "profa conversations is no longer symlink")
             assert_true((pa_cli / "conversations").is_dir(), "profa conversations is real directory")
         finally:
             if orig_home:
                 os.environ["HOME"] = orig_home
+
+    # Test 8: Consolidate with link_after when conversations already exist in destination
+    print("\n--- Test 8: Consolidate & Link with Existing Hub Collisions ---")
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_path = Path(tmp_dir)
+        hub_dir = tmp_path / ".gemini"
+        hub_cli = hub_dir / "antigravity-cli"
+        hub_cli.mkdir(parents=True)
+        (hub_cli / "conversations").mkdir(parents=True)
+        (hub_cli / "brain").mkdir(parents=True)
+        (hub_cli / "annotations").mkdir(parents=True)
+        ensure_summaries_db(hub_cli / "conversation_summaries.db")
+        home_hub = AgyHome(name="default", home_dir=hub_dir, cli_dir=hub_cli, is_default=True)
+
+        p1_dir = tmp_path / ".agy-prof1"
+        p1_cli = p1_dir / ".gemini" / "antigravity-cli"
+        p1_cli.mkdir(parents=True)
+        (p1_cli / "conversations").mkdir(parents=True)
+        (p1_cli / "brain").mkdir(parents=True)
+        (p1_cli / "annotations").mkdir(parents=True)
+        ensure_summaries_db(p1_cli / "conversation_summaries.db")
+        home_p1 = AgyHome(name="prof1", home_dir=p1_dir, cli_dir=p1_cli)
+
+        cid_existing = "12345678-1234-1234-1234-123456789abc"
+        # Put DB in BOTH hub and prof1 (collision scenario)
+        with sqlite3.connect(str(hub_cli / "conversations" / f"{cid_existing}.db")) as conn:
+            conn.execute("CREATE TABLE steps (idx int, PRIMARY KEY(idx))")
+            conn.commit()
+        with sqlite3.connect(str(p1_cli / "conversations" / f"{cid_existing}.db")) as conn:
+            conn.execute("CREATE TABLE steps (idx int, PRIMARY KEY(idx))")
+            conn.commit()
+        with sqlite3.connect(str(p1_cli / "conversation_summaries.db")) as conn:
+            conn.execute("""
+                INSERT INTO conversation_summaries
+                (conversation_id, title, preview, step_count, last_modified_time, workspace_uris, status, last_user_input_time)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (cid_existing, "Existing Task", "Prev", 1, "2026-11-01 00:00:00+00:00", "[]", "IDLE", "2026-11-01 00:00:00+00:00"))
+            conn.commit()
+
+        # Run consolidate_all_conversations with link_after=True
+        stats = consolidate_all_conversations(
+            homes={"default": home_hub, "prof1": home_p1},
+            target_home=home_hub,
+            is_move=True,
+            link_after=True,
+            force=False,
+        )
+        assert_true("prof1" in stats["linked_profiles"], "prof1 successfully linked despite collision")
+        assert_true((p1_cli / "conversations").is_symlink(), "prof1 conversations is symlink")
+        assert_true((p1_cli / "conversation_summaries.db").is_symlink(), "prof1 summaries is symlink")
 
     print("\n==================================================================")
     print(f"Results: {passed} / {total} tests passed successfully!")
